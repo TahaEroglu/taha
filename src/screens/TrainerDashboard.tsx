@@ -1,9 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Image, SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
-import { getNotificationsForTrainer, getTrainerMessages, listUsers } from '../firebase/service';
+import { getNotificationsForTrainer, getTrainerMessages, listUsers, updateTrainerProfile } from '../firebase/service';
+
 const TRAINER_SESSION_KEY = 'fitadvisor:trainerSession';
 
 type TrainerSession = {
@@ -11,6 +13,7 @@ type TrainerSession = {
   name: string;
   username: string;
   specialty?: string;
+  profilePhoto?: string | null;
 };
 
 export default function TrainerDashboard() {
@@ -19,6 +22,7 @@ export default function TrainerDashboard() {
   const [students, setStudents] = useState<any[]>([]);
   const [notifications, setNotifications] = useState<any[]>([]);
   const [messages, setMessages] = useState<any[]>([]);
+  const [photo, setPhoto] = useState<string | null>(null);
 
   const loadDashboard = async () => {
     try {
@@ -27,19 +31,17 @@ export default function TrainerDashboard() {
       if (storedSession) {
         parsed = JSON.parse(storedSession);
         setSession(parsed);
+        setPhoto(parsed?.profilePhoto ?? null);
       }
       if (!parsed?.trainerId) return;
 
-      // students
       const studentsData = await listUsers(parsed.trainerId);
       setStudents(studentsData);
 
-      // notifications
       const notifData = await getNotificationsForTrainer(parsed.trainerId);
       const sortedNotifs = notifData.sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0));
       setNotifications(sortedNotifs);
 
-      // messages summary (latest)
       const msgData = await getTrainerMessages(parsed.trainerId, 10);
       setMessages(msgData);
     } catch {
@@ -51,8 +53,27 @@ export default function TrainerDashboard() {
     loadDashboard();
   }, []);
 
+  const handlePickPhoto = async () => {
+    if (!session?.trainerId) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.6,
+      base64: true,
+    });
+    if (!result.canceled) {
+      const asset = result.assets[0];
+      const nextPhoto = asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : asset.uri;
+      setPhoto(nextPhoto);
+      const nextSession = { ...session, profilePhoto: nextPhoto };
+      setSession(nextSession);
+      await AsyncStorage.setItem(TRAINER_SESSION_KEY, JSON.stringify(nextSession));
+      await updateTrainerProfile(session.trainerId, { profilePhoto: nextPhoto });
+    }
+  };
+
   const clearNotification = async (notifId: string) => {
-    // Local clear only (backend demo does not have delete)
     setNotifications((prev) => prev.filter((n) => n.id !== notifId));
   };
 
@@ -71,9 +92,24 @@ export default function TrainerDashboard() {
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>Trainer Dashboard</Text>
-        <Text style={styles.subtitle}>
-          Hoş geldin {session.name}. Sadece sana bağlı öğrencileri görüyorsun.
-        </Text>
+        <Text style={styles.subtitle}>Hoş geldin {session.name}. Sadece sana bağlı öğrencileri görüyorsun.</Text>
+
+        <View style={styles.profileRow}>
+          {photo ? (
+            <Image source={{ uri: photo }} style={styles.avatar} />
+          ) : (
+            <View style={[styles.avatar, styles.avatarFallback]}>
+              <Text style={styles.avatarInitial}>{session.name?.[0]?.toUpperCase?.() || '🙂'}</Text>
+            </View>
+          )}
+          <View style={{ flex: 1 }}>
+            <Text style={styles.meta}>Kullanıcı adı: {session.username}</Text>
+            <Text style={styles.meta}>Uzmanlık: {session.specialty || 'Belirtilmedi'}</Text>
+          </View>
+          <TouchableOpacity style={styles.photoButton} onPress={handlePickPhoto}>
+            <Text style={styles.photoButtonText}>{photo ? 'Fotoğrafı değiştir' : 'Fotoğraf ekle'}</Text>
+          </TouchableOpacity>
+        </View>
 
         <View style={styles.quickRow}>
           <TouchableOpacity style={styles.quickButton} onPress={() => router.push('/trainer-messages')}>
@@ -100,17 +136,6 @@ export default function TrainerDashboard() {
             <Text style={styles.metricValue}>{messages.length}</Text>
             <Text style={styles.metricLabel}>Mesaj</Text>
           </View>
-        </View>
-
-        <View style={styles.card}>
-          <View style={styles.headerRow}>
-            <Text style={styles.sectionTitle}>Profil</Text>
-            <TouchableOpacity style={styles.refreshButton} onPress={loadDashboard}>
-              <Text style={styles.refreshButtonText}>Yenile</Text>
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.meta}>Kullanıcı adı: {session.username}</Text>
-          <Text style={styles.meta}>Uzmanlık: {session.specialty || 'Belirtilmedi'}</Text>
         </View>
 
         <View style={styles.card}>
@@ -185,6 +210,36 @@ const styles = StyleSheet.create({
   content: { padding: 24, gap: 12 },
   title: { fontSize: 28, fontWeight: '800', color: '#f8fafc' },
   subtitle: { fontSize: 15, color: '#cbd5e1', lineHeight: 22 },
+  profileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#0f172a',
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#1f2937',
+  },
+  avatar: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 2,
+    borderColor: '#16a34a',
+    backgroundColor: '#1f2937',
+  },
+  avatarFallback: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarInitial: { fontSize: 24, color: '#e2e8f0' },
+  photoButton: {
+    backgroundColor: '#0ea5e9',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  photoButtonText: { color: '#0b1120', fontWeight: '700' },
   quickRow: { flexDirection: 'row', gap: 10, marginTop: 8 },
   quickButton: {
     flex: 1,
@@ -218,13 +273,6 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: '#e2e8f0' },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  refreshButton: {
-    backgroundColor: '#0ea5e9',
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  refreshButtonText: { fontSize: 12, color: '#0b1120', fontWeight: '700' },
   linkButton: {
     backgroundColor: '#0ea5e9',
     borderRadius: 8,

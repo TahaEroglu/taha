@@ -232,6 +232,26 @@ export const assignTrainerToUser = async (userId: string, trainerId: string) => 
   return { ok: true };
 };
 
+export const updateUserProfile = async (
+  userId: string,
+  payload: Partial<Pick<UserProfile, 'age' | 'height' | 'weight' | 'gender' | 'goalType' | 'profilePhoto'>>
+) => {
+  await updateDoc(doc(usersCol, userId), {
+    ...payload,
+  });
+  return { ok: true };
+};
+
+export const updateTrainerProfile = async (
+  trainerId: string,
+  payload: Partial<Pick<TrainerProfile, 'name' | 'specialty' | 'bio' | 'profilePhoto'>>
+) => {
+  await updateDoc(doc(trainersCol, trainerId), {
+    ...payload,
+  });
+  return { ok: true };
+};
+
 export const getNotificationsForTrainer = async (trainerId: string) => {
   const q = query(
     notificationsCol,

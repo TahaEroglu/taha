@@ -40,6 +40,9 @@
         }
       ]
     ],
+    "extra": {
+      "usdaApiKey": "02quFaDQ2weHlkvlvVSgeoJSsLFDhn7ZblVFY9Fv"
+    },
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true

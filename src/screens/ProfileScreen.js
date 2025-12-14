@@ -1,13 +1,15 @@
-import { useState } from 'react';
+import * as ImagePicker from 'expo-image-picker';
+import { useEffect, useState } from 'react';
 import {
-    Dimensions,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Dimensions,
+  Image,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 
 const { width } = Dimensions.get('window');
@@ -17,7 +19,17 @@ export default function ProfileScreen({ profile, onUpdateProfile }) {
   const [height, setHeight] = useState(profile?.height ?? '');
   const [weight, setWeight] = useState(profile?.weight ?? '');
   const [goalType, setGoalType] = useState(profile?.goalType ?? 'lose_weight');
+  const [photo, setPhoto] = useState(profile?.profilePhoto ?? null);
   const [savedMessage, setSavedMessage] = useState('');
+
+  // Sync when profile prop changes (e.g., login/refresh)
+  useEffect(() => {
+    setPhoto(profile?.profilePhoto ?? null);
+    setAge(profile?.age ?? '');
+    setHeight(profile?.height ?? '');
+    setWeight(profile?.weight ?? '');
+    setGoalType(profile?.goalType ?? 'lose_weight');
+  }, [profile]);
 
   const handleSave = () => {
     const updated = {
@@ -26,12 +38,13 @@ export default function ProfileScreen({ profile, onUpdateProfile }) {
       weight: weight.trim(),
       gender: profile?.gender ?? '',
       goalType,
+      profilePhoto: photo,
     };
 
     if (typeof onUpdateProfile === 'function') {
       onUpdateProfile(updated);
-      setSavedMessage('Profil bilgilerin güncellendi. Hedeflerin buna göre yeniden hesaplandı.');
-      setTimeout(() => setSavedMessage(''), 2500);
+      setSavedMessage('Profil bilgilerin guncellendi.');
+      setTimeout(() => setSavedMessage(''), 2000);
     }
   };
 
@@ -50,21 +63,64 @@ export default function ProfileScreen({ profile, onUpdateProfile }) {
     </TouchableOpacity>
   );
 
+  const pickPhoto = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.6,
+      base64: true,
+    });
+    if (!result.canceled) {
+      const asset = result.assets[0];
+      const uri = asset.uri;
+      const base64 = asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : null;
+      const nextPhoto = base64 || uri;
+      setPhoto(nextPhoto);
+      const updated = {
+        age: age.trim(),
+        height: height.trim(),
+        weight: weight.trim(),
+        gender: profile?.gender ?? '',
+        goalType,
+        profilePhoto: nextPhoto,
+      };
+      if (typeof onUpdateProfile === 'function') {
+        onUpdateProfile(updated);
+        setSavedMessage('Fotoğraf güncellendi.');
+        setTimeout(() => setSavedMessage(''), 2000);
+      }
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>Profil</Text>
         <Text style={styles.subtitle}>
-          Kişisel bilgilerini ve hedeflerini güncellediğinde, günlük hedeflerin ve analizlerin de
-          buna göre yenilenir.
+          Kiºisel bilgilerini ve hedeflerini guncellediÄinde, gÃ¼nlÃ¼k hedeflerin ve analizlerin de
+          buna gÃ¶re yenilenir.
         </Text>
+
+        <View style={styles.avatarContainer}>
+          {photo ? (
+            <Image source={{ uri: photo }} style={styles.avatar} />
+          ) : (
+            <View style={[styles.avatar, styles.avatarFallback]}>
+              <Text style={styles.avatarInitial}>🙂</Text>
+            </View>
+          )}
+          <TouchableOpacity style={styles.photoButton} onPress={pickPhoto}>
+            <Text style={styles.photoButtonText}>{photo ? 'Fotoğrafı değiştir' : 'Fotoğraf ekle'}</Text>
+          </TouchableOpacity>
+        </View>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Temel Bilgiler</Text>
 
           <View style={styles.row}>
             <View style={styles.rowItem}>
-              <Text style={styles.label}>Yaş</Text>
+              <Text style={styles.label}>YaÅŸ</Text>
               <TextInput
                 value={age}
                 onChangeText={setAge}
@@ -106,7 +162,7 @@ export default function ProfileScreen({ profile, onUpdateProfile }) {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Hedefin</Text>
           <Text style={styles.cardText}>
-            Buradaki seçimlerin günlük adım, antrenman süresi ve su hedeflerine doğrudan etki eder.
+            Buradaki seÃ§imlerin gÃ¼nlÃ¼k adÄ±m, antrenman sÃ¼resi ve su hedeflerine doÄrudan etki eder.
           </Text>
 
           <View style={styles.goalRow}>
@@ -148,6 +204,37 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#4b5563',
     marginBottom: 16,
+  },
+  avatarContainer: {
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  avatar: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    borderWidth: 2,
+    borderColor: '#16a34a',
+    backgroundColor: '#d1d5db',
+  },
+  avatarFallback: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarInitial: {
+    fontSize: 32,
+    color: '#0b1120',
+  },
+  photoButton: {
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#0ea5e9',
+  },
+  photoButtonText: {
+    color: '#0b1120',
+    fontWeight: '700',
   },
   card: {
     backgroundColor: '#ffffff',

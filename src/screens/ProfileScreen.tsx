@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import * as ImagePicker from 'expo-image-picker';
+import { useEffect, useState } from 'react';
 import {
   Dimensions,
+  Image,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -18,6 +20,7 @@ type Profile = {
   weight: string;
   gender: string;
   goalType: string;
+  profilePhoto?: string | null;
 };
 
 type ProfileScreenProps = {
@@ -30,7 +33,17 @@ export default function ProfileScreen({ profile, onUpdateProfile }: ProfileScree
   const [height, setHeight] = useState(profile?.height ?? '');
   const [weight, setWeight] = useState(profile?.weight ?? '');
   const [goalType, setGoalType] = useState(profile?.goalType ?? 'lose_weight');
+  const [photo, setPhoto] = useState<string | null>(profile?.profilePhoto ?? null);
   const [savedMessage, setSavedMessage] = useState('');
+
+  // Sync incoming profile (after login/refresh)
+  useEffect(() => {
+    setPhoto(profile?.profilePhoto ?? null);
+    setAge(profile?.age ?? '');
+    setHeight(profile?.height ?? '');
+    setWeight(profile?.weight ?? '');
+    setGoalType(profile?.goalType ?? 'lose_weight');
+  }, [profile]);
 
   const handleSave = () => {
     const updated: Profile = {
@@ -39,12 +52,13 @@ export default function ProfileScreen({ profile, onUpdateProfile }: ProfileScree
       weight: weight.trim(),
       gender: profile?.gender ?? '',
       goalType,
+      profilePhoto: photo,
     };
 
     if (typeof onUpdateProfile === 'function') {
       onUpdateProfile(updated);
-      setSavedMessage('Profil bilgilerin güncellendi. Hedeflerin buna göre yeniden hesaplandı.');
-      setTimeout(() => setSavedMessage(''), 2500);
+      setSavedMessage('Profil bilgilerin guncellendi.');
+      setTimeout(() => setSavedMessage(''), 2000);
     }
   };
 
@@ -61,13 +75,54 @@ export default function ProfileScreen({ profile, onUpdateProfile }: ProfileScree
     </TouchableOpacity>
   );
 
+  const pickPhoto = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.6,
+      base64: true,
+    });
+    if (!result.canceled) {
+      const asset = result.assets[0];
+      const uri = asset.uri;
+      const base64 = asset.base64 ? `data:image/jpeg;base64,${asset.base64}` : null;
+      const nextPhoto = base64 || uri;
+      setPhoto(nextPhoto);
+      const updated: Profile = {
+        age: age.trim(),
+        height: height.trim(),
+        weight: weight.trim(),
+        gender: profile?.gender ?? '',
+        goalType,
+        profilePhoto: nextPhoto,
+      };
+      if (typeof onUpdateProfile === 'function') {
+        onUpdateProfile(updated);
+        setSavedMessage('Fotoğraf güncellendi.');
+        setTimeout(() => setSavedMessage(''), 2000);
+      }
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.title}>Profil</Text>
-        <Text style={styles.subtitle}>
-          Bilgilerini güncelleyerek hedeflerini yeniden hesaplayabilirsin.
-        </Text>
+        <Text style={styles.subtitle}>Bilgilerini guncelleyerek hedeflerini yeniden hesaplayabilirsin.</Text>
+
+        <View style={styles.avatarContainer}>
+          {photo ? (
+            <Image source={{ uri: photo }} style={styles.avatar} />
+          ) : (
+            <View style={[styles.avatar, styles.avatarFallback]}>
+              <Text style={styles.avatarInitial}>🙂</Text>
+            </View>
+          )}
+          <TouchableOpacity style={styles.photoButton} onPress={pickPhoto}>
+            <Text style={styles.photoButtonText}>{photo ? 'Fotoğrafı değiştir' : 'Fotoğraf ekle'}</Text>
+          </TouchableOpacity>
+        </View>
 
         <View style={styles.form}>
           <View style={styles.inputGroup}>
@@ -153,6 +208,37 @@ const styles = StyleSheet.create({
     color: '#6b7280',
     marginBottom: 24,
     lineHeight: 24,
+  },
+  avatarContainer: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  avatar: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    borderWidth: 2,
+    borderColor: '#16a34a',
+    backgroundColor: '#d1d5db',
+  },
+  avatarFallback: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarInitial: {
+    fontSize: 32,
+    color: '#0b1120',
+  },
+  photoButton: {
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#0ea5e9',
+  },
+  photoButtonText: {
+    color: '#0b1120',
+    fontWeight: '700',
   },
   form: {
     gap: 20,
