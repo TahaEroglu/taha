@@ -1,0 +1,40 @@
+                  <Text style={styles.dataSourceButtonText}>Senkron i≈üaretle</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        </View>
+
+                <View style={styles.card}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionTitle}>G«¨nl«¨k Kalori</Text>
+            <Text style={styles.sectionTag}>Hedef: {todayStats.caloriesTarget} kcal</Text>
+          </View>
+          <Text style={styles.subtitle}>
+            Bug«¨n aldZÒZYZÒz kalori: {foodLoading ? '...' : ${foodTotal} kcal}
+          </Text>
+          <Text style={styles.statSubValue}>
+            USDA FoodData Central aramalarZÒndan gelen kayZÒtlar otomatik toplanZÒyor.
+          </Text>
+          {foodLogEntries.length > 0 ? (
+            <View style={styles.foodResults}>
+              {foodLogEntries.slice(-3).reverse().map((item, index) => (
+                <View key={${item.id || index}-} style={styles.foodRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.foodTitle}>{item.description || 'Bilinmeyen'}</Text>
+                    <Text style={styles.foodMeta}>
+                      {Math.round(item.calories || 0)} kcal {item.portionGrams ? É?Ω g : ''}{' '}
+                      {item.brand ? () : ''}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : (
+            <Text style={styles.statSubValue}>Bug«¨n i«ıin kayZÒt yok.</Text>
+          )}
+          <View style={styles.progressBarBackground}>
+            <View
+              style={[
+                styles.progressBarFill,
+                {

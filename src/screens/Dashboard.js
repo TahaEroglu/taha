@@ -1,20 +1,21 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Dimensions,
   Image,
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  TextInput,
   Switch,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-
-import { getUsdaApiKey } from '../utils/api';
+import { useFocusEffect } from '@react-navigation/native';
+import { getDailyFoodLog } from '../firebase/service';
+import { getApiBase } from '../utils/api';
 
 const { width } = Dimensions.get('window');
 
@@ -22,6 +23,8 @@ const STORAGE_TODAY_KEY = 'fitadvisor:todayStats';
 const STORAGE_HISTORY_KEY = 'fitadvisor:history';
 const STORAGE_DATA_SOURCE_KEY = 'fitadvisor:dataSource';
 const STORAGE_REMINDERS_KEY = 'fitadvisor:reminders';
+const SESSION_KEY = 'fitadvisor:session';
+const buildFoodCacheKey = (userId, date) => `fitadvisor:foodLog:${userId}:${date}`;
 
 function computeScore(stats) {
   if (!stats) return 0;
@@ -60,16 +63,23 @@ export default function Dashboard({ profile, goals, selectedProgram }) {
   const [history, setHistory] = useState([]);
   const [dataSource, setDataSource] = useState('manual'); // manual | synced
   const [reminders, setReminders] = useState({ water: true, steps: false, workout: true });
-  const [foodEntries, setFoodEntries] = useState([]);
-  const [foodQuery, setFoodQuery] = useState('');
-  const [foodResults, setFoodResults] = useState([]);
-  const [foodStatus, setFoodStatus] = useState('idle'); // idle | loading | error
-  const [foodError, setFoodError] = useState('');
+  const [session, setSession] = useState(null);
+  const [foodLogEntries, setFoodLogEntries] = useState([]);
+  const [foodTotal, setFoodTotal] = useState(0);
+  const [foodLoading, setFoodLoading] = useState(true);
+  const [stepsInput, setStepsInput] = useState('');
+  const [sleepInput, setSleepInput] = useState('');
+  const [recLoading, setRecLoading] = useState(false);
+  const [recError, setRecError] = useState('');
+  const [recData, setRecData] = useState(null);
 
-  const usdaApiKey = getUsdaApiKey();
-
+  const apiBase = useMemo(() => getApiBase(), []);
   const todayId = new Date().toISOString().slice(0, 10);
   const score = computeScore(todayStats);
+  const intakeFromRec = recData?.inputs?.intakeCalories;
+  const burnedFromRec = recData?.inputs?.burnedCalories;
+  const netFromRec = recData?.inputs?.netCalories;
+  const displayIntake = intakeFromRec != null ? Math.round(intakeFromRec) : foodTotal;
 
   const heightMeters = profile?.height ? Number(profile.height) / 100 : null;
   const weightKg = profile?.weight ? Number(profile.weight) : null;
@@ -128,64 +138,157 @@ export default function Dashboard({ profile, goals, selectedProgram }) {
     setDataSource('manual');
   };
 
-  const addFoodEntry = (entry) => {
-    const calories = Math.max(0, Math.round(entry.calories || 0));
-    setFoodEntries((prev) => [...prev, { ...entry, calories }]);
-    setTodayStats((prev) => ({ ...prev, calories: (prev.calories || 0) + calories }));
-    setDataSource('manual');
-  };
-
-  const handleSearchFood = async () => {
-    if (!foodQuery.trim()) {
-      setFoodError('Bir besin adı yaz.');
-      return;
-    }
-    if (!usdaApiKey) {
-      setFoodError('USDA API anahtarı bulunamadı. EXPO_PUBLIC_USDA_API_KEY tanımlayın.');
-      return;
-    }
-    setFoodStatus('loading');
-    setFoodError('');
-    try {
-      const res = await fetch(
-        `https://api.nal.usda.gov/fdc/v1/foods/search?query=${encodeURIComponent(foodQuery.trim())}&pageSize=5&api_key=${usdaApiKey}`
-      );
-      if (!res.ok) {
-        setFoodError('USDA isteği başarısız.');
-        setFoodStatus('error');
-        return;
+  useEffect(() => {
+    const loadSession = async () => {
+      try {
+        const stored = await AsyncStorage.getItem(SESSION_KEY);
+        if (stored) {
+          setSession(JSON.parse(stored));
+        }
+      } catch {
+        // ignore
       }
-      const data = await res.json();
-      const foods = Array.isArray(data?.foods) ? data.foods : [];
-      const mapped = foods.map((f) => {
-        const nutrient =
-          (f.foodNutrients || []).find(
-            (n) =>
-              typeof n?.nutrientName === 'string' &&
-              n.nutrientName.toLowerCase().includes('energy') &&
-              (n.unitName || '').toLowerCase() === 'kcal'
-          ) || {};
-        return {
-          id: f.fdcId || f.description,
-          description: f.description || 'Bilinmeyen',
-          brand: f.brandOwner || f.brandName || '',
-          calories: nutrient.value || 0,
-        };
-      });
-      setFoodResults(mapped);
-      setFoodStatus('idle');
+    };
+    loadSession();
+  }, []);
+
+  const loadFoodLog = useCallback(async () => {
+    if (!session?.userId) return;
+    setFoodLoading(true);
+    const cacheKey = buildFoodCacheKey(session.userId, todayId);
+    try {
+      const cached = await AsyncStorage.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        const entries = Array.isArray(parsed?.entries) ? parsed.entries : [];
+        const total = parsed?.total || entries.reduce((sum, item) => sum + (Number(item.calories) || 0), 0);
+        setFoodLogEntries(entries);
+        setFoodTotal(total);
+        setTodayStats((prev) => ({ ...prev, calories: total }));
+      }
+    } catch {
+      // ignore cache errors
+    }
+
+    try {
+      const res = await getDailyFoodLog(session.userId, todayId);
+      if (res?.ok && res.log) {
+        const entries = Array.isArray(res.log.entries) ? res.log.entries : [];
+        const total = res.log.totalCalories ?? entries.reduce((sum, item) => sum + (Number(item.calories) || 0), 0);
+        if (entries.length > 0 || total > 0) {
+          setFoodLogEntries(entries);
+          setFoodTotal(total);
+          setTodayStats((prev) => ({ ...prev, calories: total }));
+          await AsyncStorage.setItem(cacheKey, JSON.stringify({ entries, total }));
+        }
+      }
+    } catch {
+      // ignore fetch errors
+    } finally {
+      setFoodLoading(false);
+    }
+  }, [session?.userId, todayId]);
+
+
+  const fetchDailyLog = useCallback(async () => {
+    if (!session?.userId) return;
+    try {
+      const res = await fetch(`${apiBase}/api/daily-log?userId=${session.userId}&date=${todayId}`);
+      const json = await res.json();
+      if (res.ok && json?.log) {
+        const { steps = '', sleepHours = '' } = json.log;
+        setStepsInput(steps === 0 ? '' : String(steps));
+        setSleepInput(sleepHours === 0 ? '' : String(sleepHours));
+        setTodayStats((prev) => ({ ...prev, steps: steps || prev.steps }));
+      }
     } catch (e) {
-      setFoodError('Arama sırasında hata oluştu.');
-      setFoodStatus('error');
+      setRecError('Günlük kayıt yüklenemedi.');
+    }
+  }, [apiBase, session?.userId, todayId]);
+
+  const refreshRecommendations = useCallback(
+    async (opts = {}) => {
+      if (!session?.userId) return;
+      if (!opts.keepLoading) setRecLoading(true);
+      setRecError('');
+      try {
+        const res = await fetch(`${apiBase}/api/recommendations/daily?userId=${session.userId}&date=${todayId}`);
+        const json = await res.json();
+        if (res.ok && json?.ok) {
+          setRecData({
+            summary: json.summary,
+            recommendations: json.recommendations || [],
+            challenges: json.challenges || [],
+            inputs: json.inputs || {},
+            clusterId: json.clusterId ?? null,
+          });
+          if (json.inputs) {
+            setTodayStats((prev) => ({
+              ...prev,
+              steps: json.inputs.steps ?? prev.steps,
+              calories: json.inputs.intakeCalories ?? prev.calories,
+            }));
+          }
+        } else {
+          setRecError(json?.error || 'Öneri alınamadı.');
+        }
+      } catch (e) {
+        setRecError('Öneri alınamadı.');
+      } finally {
+        setRecLoading(false);
+      }
+    },
+    [apiBase, session?.userId, todayId]
+  );
+
+  const handleSaveDailyLog = async () => {
+    if (!session?.userId) {
+      setRecError('Önce giriş yapın.');
+      return;
+    }
+    const stepsNumber = Number(stepsInput) || 0;
+    const sleepNumber = Number(sleepInput) || 0;
+    setRecLoading(true);
+    setRecError('');
+    try {
+      const res = await fetch(`${apiBase}/api/daily-log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: session.userId,
+          date: todayId,
+          steps: stepsNumber,
+          sleepHours: sleepNumber,
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || 'Kayıt başarısız');
+      }
+      setTodayStats((prev) => ({ ...prev, steps: stepsNumber }));
+      await refreshRecommendations({ keepLoading: true });
+    } catch (e) {
+      setRecError('Kayıt/öneri alınamadı. Lütfen tekrar deneyin.');
+      setRecLoading(false);
     }
   };
 
-  const handleCaloriesChange = (value) => {
-    const numeric = Number(value.replace(/[^0-9.]/g, ''));
-    if (Number.isNaN(numeric)) return;
-    setTodayStats((prev) => ({ ...prev, calories: numeric }));
-    setDataSource('manual');
-  };
+  useFocusEffect(
+    useCallback(() => {
+      loadFoodLog();
+    }, [loadFoodLog])
+  );
+
+  useEffect(() => {
+    loadFoodLog();
+  }, [loadFoodLog]);
+
+  useEffect(() => {
+    if (session?.userId) {
+      fetchDailyLog();
+      refreshRecommendations();
+    }
+  }, [session?.userId, todayId, fetchDailyLog, refreshRecommendations]);
 
   const handleRunAnalysis = async () => {
     if (!bmi) {
@@ -195,8 +298,6 @@ export default function Dashboard({ profile, goals, selectedProgram }) {
     }
 
     setAnalysisStatus('loading');
-
-    // Backend analyze kapalı; lokal analiz metni kullanılıyor.
 
     const goal = profile?.goalType;
     let text = '';
@@ -254,12 +355,9 @@ export default function Dashboard({ profile, goals, selectedProgram }) {
             setTodayStats((prev) => ({
               ...prev,
               ...parsed.stats,
-              calories: parsed.stats.calories ?? prev.calories ?? 0,
+              calories: prev.calories ?? 0, // kalori loadFoodLog tarafından belirleniyor
               caloriesTarget: parsed.stats.caloriesTarget ?? prev.caloriesTarget ?? 2000,
             }));
-            if (Array.isArray(parsed.foodEntries)) {
-              setFoodEntries(parsed.foodEntries);
-            }
           }
         }
 
@@ -297,7 +395,7 @@ export default function Dashboard({ profile, goals, selectedProgram }) {
         const currentScore = computeScore(todayStats);
         await AsyncStorage.setItem(
           STORAGE_TODAY_KEY,
-          JSON.stringify({ date: todayId, stats: todayStats, foodEntries })
+          JSON.stringify({ date: todayId, stats: todayStats, foodEntries: foodLogEntries })
         );
 
         setHistory((prev) => {
@@ -313,7 +411,7 @@ export default function Dashboard({ profile, goals, selectedProgram }) {
     };
 
     persist();
-  }, [todayStats, todayId, dataSource]);
+  }, [todayStats, todayId, dataSource, foodLogEntries]);
 
   useEffect(() => {
     const persistReminders = async () => {
@@ -352,10 +450,7 @@ export default function Dashboard({ profile, goals, selectedProgram }) {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.heroOverlay} />
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.headerRow}>
           <View style={styles.headerTextGroup}>
             <Text style={styles.greeting}>Merhaba, {userName}</Text>
@@ -363,7 +458,7 @@ export default function Dashboard({ profile, goals, selectedProgram }) {
             <View style={styles.chipRow}>
               <View style={styles.chip}>
                 <Text style={styles.chipText}>
-                  Veri kaynağı: {dataSource === 'synced' ? 'Senkron' : 'Manuel'}
+                  Veri kaynağın: {dataSource === 'synced' ? 'Senkron' : 'Manuel'}
                 </Text>
               </View>
               {selectedProgram ? (
@@ -387,8 +482,7 @@ export default function Dashboard({ profile, goals, selectedProgram }) {
           <View style={styles.scoreTextContainer}>
             <Text style={styles.scoreTitle}>Günlük sağlık skoru</Text>
             <Text style={styles.scoreDescription}>
-              Adım, su ve antrenman hedeflerin tek yerde toplandı. Devam edersen bugün hedefi
-              yakalayabilirsin.
+              Adım, su ve antrenman hedeflerin tek yerde toplandı. Devam edersen bugün hedefi yakalayabilirsin.
             </Text>
             <View style={styles.dataSourceRow}>
               <Text style={styles.dataSourceValue}>
@@ -405,120 +499,115 @@ export default function Dashboard({ profile, goals, selectedProgram }) {
 
         <View style={styles.card}>
           <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionTitle}>Görsel analiz</Text>
-            {bmi && <Text style={styles.sectionTag}>BMI: {bmi.toFixed(1)} {bmiLabel ? `(${bmiLabel})` : ''}</Text>}
+            <Text style={styles.sectionTitle}>Adım ve Uyku</Text>
+            <Text style={styles.sectionTag}>Net kalori + öneri</Text>
           </View>
-          <View style={styles.profileRow}>
-            <Image
-              source={{ uri: imageUri ?? 'https://via.placeholder.com/120x120.png?text=You' }}
-              style={styles.profileImage}
-            />
-            <View style={styles.profileTextContainer}>
-              <Text style={styles.profileSubtitle}>
-                Fotoğrafına göre duruş ve kompozisyonu özetliyoruz. {analysisText}
-              </Text>
-              <Text style={styles.bmiComment}>{bmiComment}</Text>
-              <View style={styles.profileActions}>
-                <TouchableOpacity style={styles.profileButton} onPress={handlePickImage}>
-                  <Text style={styles.profileButtonText}>Fotoğraf Seç</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.profileButton,
-                    styles.profileAnalyzeButton,
-                    analysisStatus === 'loading' && styles.profileButtonDisabled,
-                  ]}
-                  onPress={handleRunAnalysis}
-                  disabled={analysisStatus === 'loading'}
-                >
-                  <Text style={styles.profileButtonText}>
-                    {analysisStatus === 'loading' ? 'Analiz yapılıyor...' : 'Analiz Et'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.card}>
-          <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionTitle}>Bugünkü hedeflerin</Text>
-            <Text style={styles.sectionLink}>Detaylar</Text>
-          </View>
-
-          <View style={styles.statsRow}>
-            <View style={styles.statCardWide}>
-              <Text style={styles.statLabel}>Adım</Text>
-              <Text style={styles.statValue}>{todayStats.steps}</Text>
-              <Text style={styles.statSubValue}>/ {todayStats.stepsTarget} adım</Text>
-              <View style={styles.progressBarBackground}>
-                <View
-                  style={[
-                    styles.progressBarFill,
-                    { width: `${(todayStats.steps / todayStats.stepsTarget) * 100}%` },
-                  ]}
-                />
-              </View>
-              <View style={styles.actionsRow}>
-                <TouchableOpacity style={styles.smallActionButton} onPress={() => incrementSteps(500)}>
-                  <Text style={styles.smallActionText}>+500</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.smallActionButton} onPress={() => incrementSteps(1000)}>
-                  <Text style={styles.smallActionText}>+1000</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-
-          <View style={styles.statsRow}>
-            <View style={styles.statCardSmall}>
-              <Text style={styles.statLabel}>Antrenman</Text>
-              <Text style={styles.statValue}>{todayStats.workoutMinutes} dk</Text>
-              <Text style={styles.statSubValue}>/ {todayStats.workoutTarget} dk</Text>
-              <View style={styles.actionsRow}>
-                <TouchableOpacity style={styles.smallActionButton} onPress={() => incrementWorkout(5)}>
-                  <Text style={styles.smallActionText}>+5 dk</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            <View style={styles.statCardSmall}>
-              <Text style={styles.statLabel}>Su</Text>
-              <Text style={styles.statValue}>{todayStats.waterLiters} L</Text>
-              <Text style={styles.statSubValue}>/ {todayStats.waterTarget} L</Text>
-              <View style={styles.actionsRow}>
-                <TouchableOpacity style={styles.smallActionButton} onPress={() => incrementWater(0.25)}>
-                  <Text style={styles.smallActionText}>+0.25 L</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.card}>
-          <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionTitle}>Günlük Kalori</Text>
-            <Text style={styles.sectionTag}>Hedef: {todayStats.caloriesTarget} kcal</Text>
-          </View>
-          <Text style={styles.subtitle}>Bugün aldığın toplam kaloriyi yaz.</Text>
-          <View style={styles.calorieRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.statLabel}>Alınan</Text>
+          <Text style={styles.subtitle}>Adım ve uyku süreni gir, günlük özet ve önerilerini al.</Text>
+          <View style={styles.dailyInputRow}>
+            <View style={styles.inputColumn}>
+              <Text style={styles.statLabel}>Adım sayın</Text>
               <TextInput
-                value={todayStats.calories ? String(todayStats.calories) : ''}
-                onChangeText={handleCaloriesChange}
-                placeholder="ör. 1850"
-                placeholderTextColor="#94a3b8"
+                value={stepsInput}
+                onChangeText={setStepsInput}
                 keyboardType="numeric"
-                style={styles.calorieInput}
+                placeholder="Örn. 7500"
+                placeholderTextColor="#64748b"
+                style={styles.numericInput}
               />
             </View>
-            <View style={styles.calorieSummary}>
-              <Text style={styles.statLabel}>Toplam</Text>
-              <Text style={styles.calorieTotal}>{todayStats.calories || 0} kcal</Text>
-              <Text style={styles.statSubValue}>/ {todayStats.caloriesTarget} kcal</Text>
+            <View style={styles.inputColumn}>
+              <Text style={styles.statLabel}>Uyku (saat)</Text>
+              <TextInput
+                value={sleepInput}
+                onChangeText={setSleepInput}
+                keyboardType="decimal-pad"
+                placeholder="Örn. 7.5"
+                placeholderTextColor="#64748b"
+                style={styles.numericInput}
+              />
             </View>
           </View>
+          <TouchableOpacity
+            style={[styles.primaryButton, recLoading ? styles.primaryButtonDisabled : null]}
+            onPress={handleSaveDailyLog}
+            disabled={recLoading}
+          >
+            <Text style={styles.primaryButtonText}>{recLoading ? 'Hesaplanıyor...' : 'Kaydet ve öneri al'}</Text>
+          </TouchableOpacity>
+          {recError ? <Text style={styles.errorText}>{recError}</Text> : null}
+          {recData ? (
+            <View style={styles.recommendationBox}>
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.recommendationTitle}>{recData.summary || 'Günlük özet hazır'}</Text>
+                {recData.clusterId != null ? (
+                  <Text style={styles.recommendationBadge}>Küme #{recData.clusterId}</Text>
+                ) : null}
+              </View>
+              <Text style={styles.statSubValue}>
+                Net: {recData.inputs?.netCalories != null ? Math.round(recData.inputs.netCalories) : '...'} kcal | Alınan:{' '}
+                {recData.inputs?.intakeCalories != null ? Math.round(recData.inputs.intakeCalories) : '...'} kcal | Yakılan:{' '}
+                {recData.inputs?.burnedCalories != null ? Math.round(recData.inputs.burnedCalories) : '...'} kcal
+              </Text>
+              {recData.recommendations?.length ? (
+                <View style={styles.recommendationList}>
+                  {recData.recommendations.map((item, idx) => (
+                    <Text key={`rec-${idx}`} style={styles.recommendationItem}>
+                      - {item}
+                    </Text>
+                  ))}
+                </View>
+              ) : null}
+              {recData.challenges?.length ? (
+                <View style={styles.challengeBox}>
+                  <Text style={styles.recommendationBadge}>Challenge</Text>
+                  {recData.challenges.map((item, idx) => (
+                    <Text key={`ch-${idx}`} style={styles.recommendationItem}>
+                      - {item}
+                    </Text>
+                  ))}
+                </View>
+              ) : null}
+            </View>
+          ) : (
+            <Text style={styles.statSubValue}>Adım ve uyku verilerini girerek günlük önerini al.</Text>
+          )}
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionTitle}>G�nl�k Kalori</Text>
+            <Text style={styles.sectionTag}>Hedef: {todayStats.caloriesTarget} kcal</Text>
+          </View>
+          <Text style={styles.subtitle}>
+            Bug�n ald���n�z kalori: {foodLoading ? '...' : `${displayIntake} kcal`}
+          </Text>
+          <Text style={styles.statSubValue}>
+            USDA FoodData Central aramalar�ndan gelen kay�tlar otomatik toplan�yor.
+          </Text>
+          {burnedFromRec != null || netFromRec != null ? (
+            <Text style={styles.statSubValue}>
+              Yak�lan: {burnedFromRec != null ? Math.round(burnedFromRec) : '...'} kcal | Net: {
+                netFromRec != null ? Math.round(netFromRec) : '...'
+              } kcal
+            </Text>
+          ) : null}
+          {foodLogEntries.length > 0 ? (
+            <View style={styles.foodResults}>
+              {foodLogEntries.slice(-3).reverse().map((item, index) => (
+                <View key={`${item.id || index}-${index}`} style={styles.foodRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.foodTitle}>{item.description || 'Bilinmeyen'}</Text>
+                    <Text style={styles.foodMeta}>
+                      {Math.round(item.calories || 0)} kcal {item.portionGrams ? `${item.portionGrams}g` : ''}{' '}
+                      {item.brand ? `(${item.brand})` : ''}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : (
+            <Text style={styles.statSubValue}>Bugün için kayıt yok.</Text>
+          )}
           <View style={styles.progressBarBackground}>
             <View
               style={[
@@ -526,106 +615,13 @@ export default function Dashboard({ profile, goals, selectedProgram }) {
                 {
                   width: `${Math.min(
                     100,
-                    todayStats.caloriesTarget ? ((todayStats.calories || 0) / todayStats.caloriesTarget) * 100 : 0
+                    todayStats.caloriesTarget ? ((displayIntake || 0) / todayStats.caloriesTarget) * 100 : 0
                   )}%`,
                   backgroundColor: '#f59e0b',
                 },
               ]}
             />
           </View>
-        </View>
-
-        <View style={styles.card}>
-          <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionTitle}>USDA ile Kalori Ara</Text>
-            {usdaApiKey ? <Text style={styles.sectionTag}>API hazır</Text> : <Text style={styles.sectionTag}>API anahtarı eksik</Text>}
-          </View>
-          <Text style={styles.subtitle}>Besin arat, USDA FoodData Central'dan kaloriyi ekle.</Text>
-          <View style={styles.foodSearchRow}>
-            <TextInput
-              value={foodQuery}
-              onChangeText={setFoodQuery}
-              placeholder="ör. chicken breast"
-              placeholderTextColor="#9ca3af"
-              style={[styles.input, { flex: 1 }]}
-              autoCapitalize="none"
-            />
-            <TouchableOpacity
-              style={[styles.searchButton, foodStatus === 'loading' && styles.searchButtonDisabled]}
-              onPress={handleSearchFood}
-              disabled={foodStatus === 'loading'}
-            >
-              <Text style={styles.searchButtonText}>{foodStatus === 'loading' ? 'Aranıyor...' : 'Ara'}</Text>
-            </TouchableOpacity>
-          </View>
-          {foodError ? <Text style={styles.message}>{foodError}</Text> : null}
-          {foodResults.length > 0 ? (
-            <View style={styles.foodResults}>
-              {foodResults.map((item) => (
-                <View key={item.id} style={styles.foodRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.foodTitle}>{item.description}</Text>
-                    <Text style={styles.foodMeta}>
-                      {item.brand ? `${item.brand} • ` : ''}{Math.round(item.calories || 0)} kcal
-                    </Text>
-                  </View>
-                  <TouchableOpacity style={styles.foodAddButton} onPress={() => addFoodEntry(item)}>
-                    <Text style={styles.foodAddButtonText}>Ekle</Text>
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </View>
-          ) : null}
-        </View>
-
-        {foodEntries.length > 0 && (
-          <View style={styles.card}>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitle}>Günün Kalori Kaydı</Text>
-              <Text style={styles.sectionTag}>{foodEntries.length} öğe</Text>
-            </View>
-            <View style={styles.foodResults}>
-              {foodEntries.map((item, index) => (
-                <View key={`${item.id || index}-${index}`} style={styles.foodRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.foodTitle}>{item.description || 'Bilinmeyen'}</Text>
-                    <Text style={styles.foodMeta}>{Math.round(item.calories || 0)} kcal</Text>
-                  </View>
-                </View>
-              ))}
-            </View>
-          </View>
-        )}
-
-        <View style={styles.card}>
-          <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionTitle}>Hatırlatmalar</Text>
-            <Text style={styles.sectionTag}>Su / Adım / Antrenman</Text>
-          </View>
-          {['water', 'steps', 'workout'].map((key) => (
-            <View
-              key={key}
-              style={[
-                styles.reminderRow,
-                reminders[key] && styles.reminderRowActive,
-              ]}
-            >
-              <Text style={styles.reminderLabel}>
-                {key === 'water' && 'Su bildirimi'}
-                {key === 'steps' && 'Adım bildirimi'}
-                {key === 'workout' && 'Antrenman bildirimi'}
-              </Text>
-              <Switch
-                value={reminders[key]}
-                onValueChange={() => toggleReminder(key)}
-                trackColor={{ true: '#16a34a', false: '#1f2937' }}
-                thumbColor={reminders[key] ? '#dcfce7' : '#e2e8f0'}
-              />
-            </View>
-          ))}
-          <Text style={styles.reminderHint}>
-            Bildirimler yerel olarak planlanacak. Expo Notifications ekleyerek gerçek hatırlatmalara geçebilirsin.
-          </Text>
         </View>
 
         <View style={styles.card}>
@@ -653,9 +649,7 @@ export default function Dashboard({ profile, goals, selectedProgram }) {
           </View>
 
           <Text style={styles.programTitle}>FitAdvisor Gün 3</Text>
-          <Text style={styles.programSubtitle}>
-            Isınma, temel kuvvet ve hafif kardiyo ile dengeli bir seans.
-          </Text>
+          <Text style={styles.programSubtitle}>Isınma, temel kuvvet ve hafif kardiyo ile dengeli bir seans.</Text>
 
           <View style={styles.programList}>
             <View style={styles.programItem}>
@@ -989,25 +983,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#fef3c7',
   },
-  foodSearchRow: {
-    flexDirection: 'row',
-    gap: 10,
-    alignItems: 'center',
-  },
-  searchButton: {
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    backgroundColor: '#0ea5e9',
-    borderRadius: 10,
-  },
-  searchButtonDisabled: {
-    opacity: 0.6,
-  },
-  searchButtonText: {
-    color: '#0b1120',
-    fontWeight: '800',
-    fontSize: 13,
-  },
   foodResults: {
     marginTop: 8,
     gap: 10,
@@ -1039,6 +1014,81 @@ const styles = StyleSheet.create({
   foodAddButtonText: {
     color: '#0b1120',
     fontWeight: '800',
+    fontSize: 12,
+  },
+  dailyInputRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  inputColumn: {
+    flex: 1,
+  },
+  numericInput: {
+    backgroundColor: '#111827',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: '#1f2937',
+    color: '#f8fafc',
+    fontSize: 16,
+  },
+  primaryButton: {
+    marginTop: 8,
+    backgroundColor: '#0ea5e9',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  primaryButtonDisabled: {
+    opacity: 0.6,
+  },
+  primaryButtonText: {
+    color: '#0b1120',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  errorText: {
+    color: '#f87171',
+    marginTop: 8,
+    fontSize: 12,
+  },
+  recommendationBox: {
+    marginTop: 12,
+    backgroundColor: '#111827',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#1f2937',
+    padding: 12,
+    gap: 6,
+  },
+  recommendationTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#e2e8f0',
+    flex: 1,
+  },
+  recommendationList: {
+    gap: 6,
+    marginTop: 6,
+  },
+  recommendationItem: {
+    color: '#cbd5e1',
+    fontSize: 13,
+  },
+  challengeBox: {
+    marginTop: 8,
+    gap: 6,
+  },
+  recommendationBadge: {
+    backgroundColor: '#0ea5e9',
+    color: '#0b1120',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    fontWeight: '700',
     fontSize: 12,
   },
   actionsRow: {

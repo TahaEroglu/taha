@@ -71,10 +71,31 @@ export type NotificationRow = {
   createdAt: number;
 };
 
+export type FoodLogEntry = {
+  id: string;
+  description: string;
+  brand?: string;
+  calories: number;
+  portionGrams?: number;
+  source: 'usda' | 'manual';
+  addedAt: number;
+};
+
+export type FoodLog = {
+  id: string;
+  userId: string;
+  date: string; // YYYY-MM-DD
+  entries: FoodLogEntry[];
+  totalCalories: number;
+  createdAt?: number;
+  updatedAt?: number;
+};
+
 const usersCol = collection(firebaseDb, 'users');
 const trainersCol = collection(firebaseDb, 'trainers');
 const messagesCol = collection(firebaseDb, 'messages');
 const notificationsCol = collection(firebaseDb, 'notifications');
+const foodLogsCol = collection(firebaseDb, 'foodLogs');
 
 const usernameToEmail = (username: string) => `${username.trim().toLowerCase()}@fitadvisor.local`;
 
@@ -342,4 +363,44 @@ export const getTrainerMessages = async (trainerId: string, take: number = 20) =
     });
   });
   return items;
+};
+
+const buildFoodLogId = (userId: string, date: string) => `${userId}_${date}`;
+
+export const getDailyFoodLog = async (userId: string, date: string) => {
+  const ref = doc(foodLogsCol, buildFoodLogId(userId, date));
+  const snap = await getDoc(ref);
+  if (!snap.exists()) {
+    const empty: FoodLog = { id: ref.id, userId, date, entries: [], totalCalories: 0 };
+    return { ok: true, log: empty };
+  }
+  const data = snap.data() as any;
+  const log: FoodLog = {
+    id: snap.id,
+    userId: data.userId || userId,
+    date: data.date || date,
+    entries: Array.isArray(data.entries) ? data.entries : [],
+    totalCalories: Number(data.totalCalories || 0),
+    createdAt: data.createdAt,
+    updatedAt: data.updatedAt,
+  };
+  return { ok: true, log };
+};
+
+export const upsertDailyFoodLog = async (userId: string, date: string, entries: FoodLogEntry[]) => {
+  const totalCalories = entries.reduce((sum, item) => sum + (Number(item.calories) || 0), 0);
+  const ref = doc(foodLogsCol, buildFoodLogId(userId, date));
+  await setDoc(
+    ref,
+    {
+      userId,
+      date,
+      entries,
+      totalCalories,
+      updatedAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+  return { ok: true, totalCalories };
 };

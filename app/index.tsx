@@ -8,25 +8,17 @@ export default function Index() {
   return (
     <View style={[styles.container, colorScheme === 'dark' && styles.containerDark]}>
       <View style={styles.content}>
-        <Text style={[styles.title, colorScheme === 'dark' && styles.titleDark]}>
-          FitAdvisor
-        </Text>
+        <Text style={[styles.title, colorScheme === 'dark' && styles.titleDark]}>FitAdvisor</Text>
         <Text style={[styles.subtitle, colorScheme === 'dark' && styles.subtitleDark]}>
           Fitness yolculuğunu seç: Kullanıcı veya Trainer girişi.
         </Text>
-        
+
         <View style={styles.buttonContainer}>
-          <Pressable 
-            style={[styles.button, styles.primaryButton]}
-            onPress={() => router.push('/login')}
-          >
+          <Pressable style={[styles.button, styles.primaryButton]} onPress={() => router.push('/login')}>
             <Text style={styles.buttonText}>Kullanıcı Girişi</Text>
           </Pressable>
-          
-          <Pressable 
-            style={[styles.button, styles.trainerButton]}
-            onPress={() => router.push('/trainer-login')}
-          >
+
+          <Pressable style={[styles.button, styles.trainerButton]} onPress={() => router.push('/trainer-login')}>
             <Text style={[styles.buttonText, styles.trainerButtonText]}>Trainer Girişi</Text>
           </Pressable>
         </View>
@@ -92,10 +84,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#0ea5e9',
     borderWidth: 0,
   },
+  trainerButton: {
+    backgroundColor: '#0ea5e9',
+  },
   buttonText: {
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  trainerButtonText: {
+    color: '#0b1120',
   },
   secondaryButtonText: {
     color: '#0b1120',

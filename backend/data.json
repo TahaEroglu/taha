@@ -62,5 +62,28 @@
       "createdAt": "2025-12-10T09:10:56.738Z",
       "type": "assign_request"
     }
-  ]
+  ],
+  "dailyLogs": [
+    {
+      "userId": "ikJxcKlGTnbwmhp4SjnU2i1s50q2",
+      "date": "2025-12-15",
+      "steps": 5000,
+      "sleepHours": 8,
+      "intakeCalories": 0,
+      "burnedCaloriesEstimated": 200,
+      "netCalories": -200,
+      "clusterId": null
+    },
+    {
+      "userId": "ikJxcKlGTnbwmhp4SjnU2i1s50q2",
+      "date": "2025-12-16",
+      "steps": 5000,
+      "sleepHours": 8,
+      "intakeCalories": 0,
+      "burnedCaloriesEstimated": 200,
+      "netCalories": -200,
+      "clusterId": null
+    }
+  ],
+  "foodLogs": []
 }
